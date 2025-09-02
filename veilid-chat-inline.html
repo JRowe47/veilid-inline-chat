@@ -1,0 +1,622 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Veilid Browser Chat — CSP + wasm‑bindgen init fixed</title>
+
+<!--
+  Dev CSP that allows WebAssembly and blob/data module imports.
+  If you serve from a web server, its HTTP CSP header OVERRIDES this.
+  For production, tighten this and remove *-eval allowances.
+-->
+<meta http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self' data: blob:;
+        connect-src *;
+        img-src 'self' data: blob:;
+        style-src 'self' 'unsafe-inline';
+        script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:;
+        worker-src 'self' blob: data:;
+      ">
+
+<style>
+  :root { --bg:#0b0d10; --fg:#dfe5ed; --muted:#9aa4b2; --ok:#27c93f; --warn:#ffbd2e; --err:#ff5f56; --panel:#12161b; --accent:#6aa3ff; --line:#20262e; }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.35 ui-monospace, Menlo, Consolas, monospace}
+  header{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;background:linear-gradient(to bottom, #12161b, #0d1014)}
+  h1{margin:0;font-size:14px;font-weight:600}
+  .tag{padding:2px 6px;border-radius:6px;background:#1c232c;color:#9db1cd;border:1px solid var(--line)}
+  main{display:grid;grid-template-columns:360px 1fr;gap:12px;padding:12px}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  section>h2{margin:0;padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);letter-spacing:.3px;text-transform:uppercase}
+  .p{padding:10px 12px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+  label{color:var(--muted)}
+  input[type="text"], textarea{background:#0e1216;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px 8px;font:12px/1.2 ui-monospace, monospace}
+  textarea{width:100%;min-height:84px;resize:vertical}
+  input[type="file"]{color:var(--muted)}
+  button{background:#161c23;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:7px 10px;cursor:pointer}
+  button:hover{border-color:#2a3542}
+  button.primary{background:#0f1a2b;border-color:#21406e}
+  button.good{border-color:#1f3b2b;background:#112017}
+  button.warn{border-color:#3b2e1f;background:#201711}
+  button.bad{border-color:#3b1f1f;background:#201111}
+  .mono{font-family:ui-monospace, Menlo, Consolas, monospace}
+  .muted{color:var(--muted)}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:8px 6px}
+  #log{background:#0b0e12;border-top:1px solid var(--line);padding:8px 10px;height:45vh;overflow:auto;white-space:pre-wrap}
+  .pill{padding:1px 6px;border-radius:9999px;border:1px solid var(--line);background:#121820}
+  .grid2{display:grid;grid-template-columns: 1fr 1fr;gap:8px}
+  .divider{height:1px;background:var(--line);margin:8px 0}
+  .hint{color:#9aa4b2;font-size:12px}
+</style>
+
+<header>
+  <h1>Veilid Browser Chat
+    <span class="tag" id="tagVersion">runtime: not loaded</span>
+  </h1>
+  <span class="tag" id="tagUA"></span>
+  <span class="tag" id="tagCtx"></span>
+  <span class="tag" id="tagStatus">idle</span>
+</header>
+
+<main>
+
+  <!-- Runtime loader -->
+  <section id="sectRuntime">
+    <h2>(−1) Load runtime (files / embedded / paste)</h2>
+    <div class="p">
+      <div class="row">
+        <label><input type="radio" name="rtsrc" value="files" checked> Pick files (.js + .wasm)</label>
+        <label><input type="radio" name="rtsrc" value="embedded"> Embedded Base64</label>
+        <label><input type="radio" name="rtsrc" value="paste"> Paste Base64</label>
+      </div>
+
+      <div id="srcFiles">
+        <div class="row"><label>Glue .js</label><input type="file" id="fileGlue" accept=".js,application/javascript"></div>
+        <div class="row"><label>WASM .wasm</label><input type="file" id="fileWasm" accept=".wasm,application/wasm"></div>
+        <div class="hint">Choose the browser glue .js and its matching .wasm (wasm‑bindgen build).</div>
+      </div>
+
+      <div id="srcEmbedded" style="display:none">
+        <div class="hint">Replace the constants at the top of this file with Base64 to make it self‑contained.</div>
+      </div>
+
+      <div id="srcPaste" style="display:none">
+        <div class="row">Glue (.js) Base64</div>
+        <textarea id="txtGlueB64" placeholder="Paste Base64 for glue .js"></textarea>
+        <div class="row">WASM (.wasm) Base64</div>
+        <textarea id="txtWasmB64" placeholder="Paste Base64 for .wasm"></textarea>
+      </div>
+
+      <div class="divider"></div>
+      <div class="row">
+        <button id="btnLoadRT" class="primary">Load runtime</button>
+        <button id="btnUnloadRT" class="bad" disabled>Unload</button>
+      </div>
+
+      <div class="divider"></div>
+      <div class="kv mono">
+        <div>Glue size</div><div id="kvGlue">—</div>
+        <div>WASM size</div><div id="kvWasm">—</div>
+        <div>Exports</div><div id="kvExports">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Start / attach -->
+  <section id="sectStart">
+    <h2>0) Start / Attach</h2>
+    <div class="p">
+      <div class="row">
+        <button id="btnProbe">Probe bootstraps</button>
+        <button id="btnSeed">Seed defaults</button>
+        <label><input type="checkbox" id="chkReachables"> Use only reachables</label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="chkForceWSS"> Force WSS</label>
+        <label><input type="checkbox" id="chkAllowWssIPs"> Allow WSS to IPs</label>
+        <label><input type="checkbox" id="chkWs"> Enable WS</label>
+        <label><input type="checkbox" id="chkWss" checked> Enable WSS</label>
+      </div>
+      <div class="row">
+        <button id="btnStart" class="primary" disabled>Start core</button>
+        <button id="btnAttach" class="good" disabled>Attach</button>
+        <button id="btnDetach" class="bad" disabled>Detach</button>
+      </div>
+      <div class="divider"></div>
+      <div class="row"><label>Bootstraps (one per line):</label></div>
+      <textarea id="txtBoot"></textarea>
+    </div>
+  </section>
+
+  <!-- Config -->
+  <section id="sectConfig">
+    <h2>1) Effective config</h2>
+    <div class="p"><pre id="cfgOut" class="mono" style="max-height:26vh;overflow:auto"></pre></div>
+  </section>
+
+  <!-- DHT room -->
+  <section id="sectRooms">
+    <h2>2) DHT Room</h2>
+    <div class="p">
+      <div class="hint">Use room chat when private route export isn’t available in this build.</div>
+      <div class="row grid2">
+        <label>Namespace<br><input id="ns" type="text" value="chat"></label>
+        <label>Kind<br><input id="kind" type="text" value="room"></label>
+      </div>
+      <div class="row">
+        <label>Room key</label>
+        <input id="room" type="text" placeholder="e.g. testroom" style="width:240px">
+        <button id="btnJoin" class="primary" disabled>Join room</button>
+        <button id="btnLeave" disabled>Leave</button>
+      </div>
+      <div class="row"><label class="muted">Derived key</label><span id="recKey" class="pill mono">—</span></div>
+      <div class="row"><label class="muted">Schema mode</label><span id="schemaMode" class="pill mono">not-detected</span></div>
+    </div>
+  </section>
+
+  <!-- Private route -->
+  <section id="sectRoutes">
+    <h2>3) Private Route</h2>
+    <div class="p">
+      <div id="routeUnavailable" class="hint" style="display:none">
+        This runtime doesn’t expose route export/import; private‑route chat is disabled. Use a DHT room.
+      </div>
+      <div id="routePanel">
+        <div class="row">
+          <button id="btnExport" disabled>My private route</button>
+          <input id="txtPeerRoute" type="text" placeholder="Peer route" style="width:60%">
+          <button id="btnImport" disabled>Connect</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sectLog">
+    <h2>Debug & Events</h2>
+    <div id="log" class="mono"></div>
+  </section>
+</main>
+
+<script>
+/*** Optional embedded Base64 so this can be self‑contained (leave empty to use file picker) ***/
+const EMBED_GLUE_B64 = "";
+const EMBED_WASM_B64 = "";
+
+/*** Logger ***/
+const logEl = document.getElementById('log');
+const tagStatus = document.getElementById('tagStatus');
+const tagUA = document.getElementById('tagUA');
+const tagCtx = document.getElementById('tagCtx');
+const tagVer = document.getElementById('tagVersion');
+function ts(){ const d=new Date(); return d.toLocaleTimeString(); }
+function log(s){ const line = `[${ts()}] ${s}`; console.log(line); logEl.textContent += line + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+function j(v){ try{return JSON.stringify(v);}catch{return String(v);} }
+
+/*** UI refs ***/
+const btnLoadRT  = document.getElementById('btnLoadRT');
+const btnUnloadRT= document.getElementById('btnUnloadRT');
+const fileGlue   = document.getElementById('fileGlue');
+const fileWasm   = document.getElementById('fileWasm');
+const txtGlueB64 = document.getElementById('txtGlueB64');
+const txtWasmB64 = document.getElementById('txtWasmB64');
+const kvGlue     = document.getElementById('kvGlue');
+const kvWasm     = document.getElementById('kvWasm');
+const kvExports  = document.getElementById('kvExports');
+
+const btnProbe   = document.getElementById('btnProbe');
+const btnSeed    = document.getElementById('btnSeed');
+const btnStart   = document.getElementById('btnStart');
+const btnAttach  = document.getElementById('btnAttach');
+const btnDetach  = document.getElementById('btnDetach');
+const chkReach   = document.getElementById('chkReachables');
+const chkForce   = document.getElementById('chkForceWSS');
+const chkAllowIP = document.getElementById('chkAllowWssIPs');
+const chkWs      = document.getElementById('chkWs');
+const chkWss     = document.getElementById('chkWss');
+const txtBoot    = document.getElementById('txtBoot');
+const cfgOut     = document.getElementById('cfgOut');
+
+const nsEl       = document.getElementById('ns');
+const kindEl     = document.getElementById('kind');
+const roomEl     = document.getElementById('room');
+const btnJoin    = document.getElementById('btnJoin');
+const btnLeave   = document.getElementById('btnLeave');
+const recKeyEl   = document.getElementById('recKey');
+const schemaModeEl = document.getElementById('schemaMode');
+
+const routeUnavailable = document.getElementById('routeUnavailable');
+const routePanel       = document.getElementById('routePanel');
+const btnExport        = document.getElementById('btnExport');
+const btnImport        = document.getElementById('btnImport');
+
+const rtsrcRadios = [...document.querySelectorAll('input[name="rtsrc"]')];
+const srcFiles    = document.getElementById('srcFiles');
+const srcEmbedded = document.getElementById('srcEmbedded');
+const srcPaste    = document.getElementById('srcPaste');
+
+/*** Global state ***/
+let runtimeLoaded = false;
+let wasm = null;   // wasm-bindgen module namespace
+let ctx  = null;   // VeilidRoutingContext
+let started = false;
+let attached = false;
+let reachable = [];
+let schemaStrategy = null;
+
+tagUA.textContent = navigator.userAgent;
+tagCtx.textContent = `protocol=${location.protocol.replace(':','')}, secure=${window.isSecureContext}`;
+log(`Page ready. UA: ${navigator.userAgent}`);
+log(`Running from ${location.protocol}// — this is fine. Browsers may reject some ws:// hosts; WSS is safer.`);
+
+/*** Source selector ***/
+function currentRtSrc(){
+  const r = rtsrcRadios.find(x=>x.checked)?.value || "files";
+  srcFiles.style.display    = (r==="files")    ? "" : "none";
+  srcEmbedded.style.display = (r==="embedded") ? "" : "none";
+  srcPaste.style.display    = (r==="paste")    ? "" : "none";
+  return r;
+}
+rtsrcRadios.forEach(r=>r.addEventListener('change', currentRtSrc));
+currentRtSrc();
+
+/*** Bootstraps ***/
+function seedBootstraps() {
+  const list = [
+    "wss://v.eu.webonedotfive.com:8443/ws",
+    "wss://v.sa.webonedotfive.com:8443/ws",
+    "ws://68.183.200.24:5150/ws",
+    "ws://192.241.173.119:5150/ws",
+    "ws://172.104.185.151:5150/ws",
+    "ws://146.190.167.224:5150/ws",
+    "ws://107.161.122.229:5150/ws",
+    "ws://178.128.236.103:5150/ws",
+    "ws://162.19.47.91:5150/ws",
+    "ws://170.187.157.105:5150/ws",
+    "ws://104.237.154.76:5150/ws",
+    "ws://129.213.38.63:5150/ws",
+    "ws://45.63.34.75:5150/ws",
+    "ws://51.159.54.86:5150/ws",
+    "ws://64.227.9.130:5150/ws",
+    "ws://195.15.200.14:5150/ws",
+  ];
+  txtBoot.value = list.join("\n");
+  log("Seeded bootstrap list with mixed WSS+WS candidates (edit as needed).");
+}
+seedBootstraps();
+
+function normalizeBoots(raw) {
+  const lines = (raw||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const onlyWss = chkForce.checked && chkWss.checked && !chkWs.checked;
+  const keepIP  = chkAllowIP.checked;
+  return lines.filter(u=>{
+    if (!onlyWss) return true;
+    return !u.startsWith("ws://");
+  }).filter(u=>{
+    if (!u.startsWith("wss://")) return true; // ws:// passes
+    if (keepIP) return true;
+    try{
+      const h = new URL(u).hostname;
+      if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
+        log(`Skip WSS IP (TLS SNI likely to fail): ${h}. Enable "Allow WSS to IPs" to keep it.`);
+        return false;
+      }
+    }catch{}
+    return true;
+  });
+}
+
+async function probeBootstraps() {
+  const boots = normalizeBoots(txtBoot.value);
+  if (!boots.length) { log("Preflight: no bootstraps to probe."); return; }
+  log(`Preflight probing ${boots.length} bootstrap(s)…`);
+  reachable = [];
+  const TIMEOUT = 3000;
+  async function tryOne(u){
+    const t0 = performance.now();
+    try{
+      const ws = new WebSocket(u);
+      const p = new Promise((resolve,reject)=>{
+        const timer = setTimeout(()=>reject(new Error("TIMEOUT")), TIMEOUT);
+        ws.onopen = ()=>{ clearTimeout(timer); try{ws.close();}catch{} resolve(performance.now()-t0); };
+        ws.onerror= ()=>{ clearTimeout(timer); reject(new Error("ERROR")); };
+      });
+      const ms = await p;
+      log(`Probe: OK ${u} (${Math.round(ms)}ms)`);
+      reachable.push(u);
+    }catch(e){
+      log(`Probe: ${e.message==="TIMEOUT"?"TIMEOUT":"ERROR  "} ${u}`);
+    }
+  }
+  const queue = boots.slice();
+  const PAR = 4;
+  await Promise.all(new Array(Math.min(PAR, queue.length)).fill(0).map(async ()=>{
+    while(queue.length) await tryOne(queue.shift());
+  }));
+  log(`Probe summary: good=${reachable.length} bad=${boots.length-reachable.length}`);
+  if (reachable.length) log(`Reachable list prepared (${reachable.length}). Enable “Use only reachables” so Start will use this list.`);
+}
+
+/*** Runtime loading (fixed init signature) ***/
+function bytesFromB64(b64){ return Uint8Array.from(atob(b64), c=>c.charCodeAt(0)); }
+
+async function loadRuntime() {
+  if (runtimeLoaded) { log("Runtime already loaded."); return; }
+
+  const src = currentRtSrc();
+  let glueBytes = null, wasmBytes = null;
+
+  try {
+    if (src === "files") {
+      const g = fileGlue.files?.[0];
+      const w = fileWasm.files?.[0];
+      if (!g || !w) { log("Pick files: glue .js and .wasm are both required."); return; }
+      const glueText = await g.text();
+      glueBytes = new TextEncoder().encode(glueText);
+      wasmBytes = new Uint8Array(await w.arrayBuffer());
+    } else if (src === "embedded") {
+      if (!EMBED_GLUE_B64 || !EMBED_WASM_B64) { log("Embedded mode selected but no Base64 embedded. Use files or paste."); return; }
+      glueBytes = bytesFromB64(EMBED_GLUE_B64);
+      wasmBytes = bytesFromB64(EMBED_WASM_B64);
+    } else {
+      const g = (txtGlueB64.value||"").trim();
+      const w = (txtWasmB64.value||"").trim();
+      if (!g || !w) { log("Paste mode: both Base64 fields are required."); return; }
+      glueBytes = bytesFromB64(g);
+      wasmBytes = bytesFromB64(w);
+    }
+  } catch (e) {
+    log(`Failed to read runtime inputs: ${e?.message||e}`); return;
+  }
+
+  kvGlue.textContent = glueBytes.length.toLocaleString()+"b";
+  kvWasm.textContent = wasmBytes.length.toLocaleString()+"b";
+
+  try {
+    const glueBlob = new Blob([glueBytes], {type: "text/javascript"});
+    const glueURL  = URL.createObjectURL(glueBlob);
+    const mod = await import(glueURL);
+
+    // New recommended style: pass a single options object.
+    let inited = false;
+    try {
+      await mod.default({ module_or_path: wasmBytes, module: wasmBytes });
+      inited = true;
+    } catch (e1) {
+      // Fallback for older glue signatures
+      await mod.default(wasmBytes);
+      inited = true;
+      log("Init fallback used (deprecated parameter form).");
+    }
+
+    wasm = mod;
+    runtimeLoaded = true;
+    btnUnloadRT.disabled = false;
+    btnStart.disabled = true;   // enabled after config preview below
+    btnAttach.disabled = true;  // enabled after Start
+    document.getElementById('btnJoin').disabled = true;
+
+    tagVer.textContent = "wasm-bindgen init OK";
+    log("wasm-bindgen init OK via options object (deprecation warning avoided).");
+
+    if (wasm.initialize_veilid_wasm) { wasm.initialize_veilid_wasm(); log("initialize_veilid_wasm ok"); }
+    else { log("initialize_veilid_wasm unavailable (skipped)."); }
+
+    const keys = Object.keys(wasm);
+    kvExports.textContent = `count=${keys.length}`;
+    log(`Module exports (${keys.length}) loaded.`);
+
+    // Feature detect route export/import
+    const exports = Object.keys(wasm);
+    const hasExportRoute = exports.includes("export_remote_private_route") || exports.includes("exportRoute") || exports.includes("toString");
+    document.getElementById('routePanel').style.display = hasExportRoute ? "" : "none";
+    document.getElementById('routeUnavailable').style.display = hasExportRoute ? "none" : "block";
+    if (!hasExportRoute) log("Export route not supported in this browser build; use DHT room chat.");
+
+    // Show config preview and enable Start
+    cfgOut.textContent = JSON.stringify(buildConfig(), null, 2);
+    btnStart.disabled = false;
+
+  } catch (e) {
+    log(`Fatal while loading runtime: ${e?.message||e}`);
+  }
+}
+
+function unloadRuntime() {
+  wasm = null; ctx = null; runtimeLoaded = false; started = false; attached = false;
+  btnUnloadRT.disabled = true;
+  btnStart.disabled = true;
+  btnAttach.disabled = true;
+  btnDetach.disabled = true;
+  btnJoin.disabled = true;
+  kvExports.textContent = "—";
+  tagVer.textContent = "runtime: not loaded";
+  tagStatus.textContent = "idle";
+  log("Runtime references cleared. Reload page to fully reset if needed.");
+}
+
+/*** Build config ***/
+function buildConfig() {
+  const wsEnable  = document.getElementById('chkWs').checked;
+  const wssEnable = document.getElementById('chkWss').checked;
+  let boots = normalizeBoots(txtBoot.value);
+  if (chkReach.checked && reachable.length) boots = reachable.slice();
+
+  const cfg = {
+    program_name: "Veilid Browser Chat",
+    namespace: "chat-demo",
+    capabilities: { disable: [] },
+    protected_store: { allow_insecure_fallback: true, always_use_insecure_storage: true, directory: ".", delete: false, device_encryption_key_password: "", new_device_encryption_key_password: null },
+    table_store:  { directory: ".", delete: false },
+    block_store:  { directory: ".", delete: false },
+    network: {
+      connection_initial_timeout_ms: 2000,
+      connection_inactivity_timeout_ms: 60000,
+      max_connections_per_ip4: 32,
+      max_connections_per_ip6_prefix: 32,
+      max_connections_per_ip6_prefix_size: 56,
+      max_connection_frequency_per_min: 128,
+      client_allowlist_timeout_ms: 300000,
+      reverse_connection_receipt_time_ms: 5000,
+      hole_punch_receipt_time_ms: 5000,
+      network_key_password: null,
+      routing_table: {
+        node_id: [], node_id_secret: [],
+        bootstrap: boots,
+        bootstrap_keys: [],
+        limit_over_attached: 64, limit_fully_attached: 32, limit_attached_strong: 16, limit_attached_good: 8, limit_attached_weak: 4
+      },
+      rpc: { concurrency: 0, queue_size: 1024, max_timestamp_behind_ms: 10000, max_timestamp_ahead_ms: 10000, timeout_ms: 5000, max_route_hop_count: 4, default_route_hop_count: 1 },
+      dht: {
+        max_find_node_count: 20,
+        resolve_node_timeout_ms: 10000, resolve_node_count: 1, resolve_node_fanout: 4,
+        get_value_timeout_ms: 10000, get_value_count: 3, get_value_fanout: 4,
+        set_value_timeout_ms: 10000, set_value_count: 5, set_value_fanout: 4,
+        min_peer_count: 20, min_peer_refresh_time_ms: 60000,
+        validate_dial_info_receipt_time_ms: 2000,
+        local_subkey_cache_size: 128, local_max_subkey_cache_memory_mb: 256,
+        remote_subkey_cache_size: 1024, remote_max_records: 65536, remote_max_subkey_cache_memory_mb: 64, remote_max_storage_space_mb: 0,
+        public_watch_limit: 32, member_watch_limit: 8, max_watch_expiration_ms: 600000
+      },
+      upnp: true, detect_address_changes: true, restricted_nat_retries: 0,
+      tls: { certificate_path: "", private_key_path: "", connection_initial_timeout_ms: 2000 },
+      application: {
+        https: { enabled: false, listen_address: ":0", path: "app", url: null },
+        http:  { enabled: false, listen_address: ":0", path: "app", url: null }
+      },
+      protocol: {
+        udp: { enabled: false, socket_pool_size: 0, listen_address: "0.0.0.0:0", public_address: null },
+        tcp: { connect: false, listen: false, max_connections: 0, listen_address: "0.0.0.0:0", public_address: null },
+        ws:  { connect: !!wsEnable,  listen: false, max_connections: 8, listen_address: "0.0.0.0:0", path: "/ws", url: null },
+        wss: { connect: !!wssEnable, listen: false, max_connections: 8, listen_address: "0.0.0.0:0", path: "/ws", url: null }
+      }
+    }
+  };
+  cfgOut.textContent = JSON.stringify(cfg, null, 2);
+  log(`CFG size=${cfgOut.textContent.length} bytes`);
+  log(`Bootstraps (${boots.length}): ${boots.join(", ")}`);
+  log(`Protocols: ws.connect=${cfg.network.protocol.ws.connect} wss.connect=${cfg.network.protocol.wss.connect}`);
+  return cfg;
+}
+
+/*** Start core + updates ***/
+async function startCore() {
+  if (!runtimeLoaded) { log("Load the runtime first."); return; }
+  if (started) { log("startCore: already started"); return; }
+
+  const cfg = buildConfig();
+
+  const updateCb = (u) => {
+    try { if (typeof u === "string") u = JSON.parse(u); } catch {}
+    if (!u || !u.kind) return;
+    if (u.kind === "Attachment") {
+      tagStatus.textContent = u.state;
+      log(`[update] ${JSON.stringify(u)}`);
+      if (u.state === "Detached") { attached = false; btnDetach.disabled = true; }
+      if (u.state && u.state.startsWith("Attached")) { attached = true; btnDetach.disabled = false; }
+      if (u.state === "FullyAttached" || u.state === "OverAttached") { attached = true; btnDetach.disabled = false; }
+    } else if (u.kind === "Network") {
+      log(u.started ? `Network started; peers=${(u.peers && u.peers.length)||0}` : "Network stopped.");
+    } else {
+      log(`[update] ${JSON.stringify(u)}`);
+    }
+  };
+
+  log("startup: calling startup_veilid_core(updateCb, config)…");
+  try {
+    await wasm.startup_veilid_core?.(updateCb, JSON.stringify(cfg));
+    started = true;
+    btnAttach.disabled = false;
+    log("startup_veilid_core resolved.");
+  } catch (e) {
+    log(`startup_veilid_core failed: ${e?.message||e}`);
+  }
+
+  try {
+    ctx = new wasm.VeilidRoutingContext();
+    const methods = Object.getOwnPropertyNames((wasm.VeilidRoutingContext||{}).prototype||{});
+    log(`VeilidRoutingContext methods (${methods.length}): ${methods.join(", ")}`);
+  } catch (e) {
+    log(`VeilidRoutingContext new() failed: ${e?.message||e}`);
+  }
+
+  const hasExportRoute = Object.keys(wasm||{}).some(k => k==="export_remote_private_route"||k==="exportRoute"||k==="toString");
+  document.getElementById('routePanel').style.display = hasExportRoute ? "" : "none";
+  document.getElementById('routeUnavailable').style.display = hasExportRoute ? "none" : "block";
+}
+
+async function doAttach() {
+  if (!started) { log("Start core first."); return; }
+  log("attach() called");
+  try{
+    await wasm.attach?.();
+    setTimeout(()=>{ if (!attached) log("No Attachment update received yet; enabling controls in optimistic mode."); }, 750);
+    btnDetach.disabled = false;
+  }catch(e){ log(`attach error: ${j(e)}`); }
+}
+async function doDetach() {
+  log("detach() called");
+  try{ await wasm.detach?.(); btnDetach.disabled = true; }catch(e){ log(`detach error: ${j(e)}`); }
+}
+
+/*** DHT schema compatibility ***/
+function pickSchemaStrategy() {
+  if (schemaStrategy) return schemaStrategy;
+  if (!ctx || !ctx.getDhtRecordKey) throw new Error("getDhtRecordKey not available");
+  const candidates = [
+    { name: "plain-strings", fn: (ns,kind,name)=>ctx.getDhtRecordKey(ns,kind,name) },
+    { name: "tag-type-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"namespace", namespace:ns}, kind, name) },
+    { name: "tag-Type-Namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"Namespace", namespace:ns}, kind, name) },
+    { name: "tag-schema-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({schema:"namespace", namespace:ns}, kind, name) },
+    { name: "tag-type-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"app", app:ns}, kind, name) },
+    { name: "tag-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns}, kind, name) },
+  ];
+  for (const c of candidates) {
+    try { const k=c.fn("__probe__","room","hello"); if (k) { schemaStrategy=c; schemaModeEl.textContent=c.name; return c; } } catch {}
+  }
+  throw new Error("Could not determine DHTSchema tagging for this runtime");
+}
+function deriveRecordKey(ns, kind, name) {
+  const strat = pickSchemaStrategy();
+  return strat.fn(ns, kind, name);
+}
+
+/*** Room join/leave ***/
+async function joinRoom() {
+  if (!attached) { log("Join room error: not attached yet"); return; }
+  const ns=(nsEl.value||"").trim(), kind=(kindEl.value||"").trim(), name=(roomEl.value||"").trim();
+  if (!ns || !kind || !name) { log("Join room error: namespace/kind/room are required."); return; }
+  try{
+    const key = deriveRecordKey(ns, kind, name);
+    recKeyEl.textContent = typeof key === "string" ? key : JSON.stringify(key);
+    log(`Room key derived ok. schemaMode=${schemaStrategy?.name}`);
+    if (!ctx) ctx = new (wasm?.VeilidRoutingContext)();
+    try { await ctx.createDhtRecord?.(key); log("createDhtRecord ok (or already existed)"); } catch(e){ log(`createDhtRecord: ${e?.message||e}`); }
+    try { await ctx.openDhtRecord?.(key);   log("openDhtRecord ok"); }                   catch(e){ log(`openDhtRecord: ${e?.message||e}`); }
+    btnLeave.disabled=false; btnJoin.disabled=true;
+  }catch(e){ log(`Join room error: ${e?.message||e}`); }
+}
+async function leaveRoom(){
+  recKeyEl.textContent = "—";
+  schemaModeEl.textContent = schemaStrategy? schemaStrategy.name : "not-detected";
+  btnLeave.disabled=true; btnJoin.disabled=false;
+}
+
+/*** Wire up ***/
+document.getElementById('btnLoadRT').onclick  = loadRuntime;
+document.getElementById('btnUnloadRT').onclick= unloadRuntime;
+document.getElementById('btnSeed').onclick    = seedBootstraps;
+document.getElementById('btnProbe').onclick   = probeBootstraps;
+document.getElementById('btnStart').onclick   = startCore;
+document.getElementById('btnAttach').onclick  = doAttach;
+document.getElementById('btnDetach').onclick  = doDetach;
+document.getElementById('btnJoin').onclick    = joinRoom;
+document.getElementById('btnLeave').onclick   = leaveRoom;
+
+document.getElementById('chkReachables').onchange  = e=> log(`Use only reachables: ${e.target.checked}`);
+document.getElementById('chkForceWSS').onchange    = e=> log(`Force WSS ${e.target.checked ? "enabled" : "disabled"}`);
+document.getElementById('chkAllowWssIPs').onchange = e=> log(`Allow WSS to IPs ${e.target.checked ? "enabled" : "disabled"}`);
+document.getElementById('chkWs').onchange          = e=> log(`WS connect: ${e.target.checked}`);
+document.getElementById('chkWss').onchange         = e=> log(`WSS connect: ${e.target.checked}`);
+
+/*** Initial config preview ***/
+cfgOut.textContent = JSON.stringify(buildConfig(), null, 2);
+</script>
