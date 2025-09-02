@@ -227,6 +227,7 @@ const routeUnavailable = document.getElementById('routeUnavailable');
 const routePanel       = document.getElementById('routePanel');
 const btnExport        = document.getElementById('btnExport');
 const btnImport        = document.getElementById('btnImport');
+const txtPeerRoute     = document.getElementById('txtPeerRoute');
 
 const rtsrcRadios = [...document.querySelectorAll('input[name="rtsrc"]')];
 const srcFiles    = document.getElementById('srcFiles');
@@ -241,6 +242,7 @@ let started = false;
 let attached = false;
 let reachable = [];
 let schemaStrategy = null;
+let hasRouteExport = false;
 
 tagUA.textContent = navigator.userAgent;
 tagCtx.textContent = `protocol=${location.protocol.replace(':','')}, secure=${window.isSecureContext}`;
@@ -406,10 +408,11 @@ async function loadRuntime() {
 
     // Feature detect route export/import
     const exports = Object.keys(wasm);
-    const hasExportRoute = exports.includes("export_remote_private_route") || exports.includes("exportRoute") || exports.includes("toString");
-    document.getElementById('routePanel').style.display = hasExportRoute ? "" : "none";
-    document.getElementById('routeUnavailable').style.display = hasExportRoute ? "none" : "block";
-    if (!hasExportRoute) log("Export route not supported in this browser build; use DHT room chat.");
+    hasRouteExport = exports.includes("export_remote_private_route") || exports.includes("exportRoute") || exports.includes("toString");
+    routePanel.style.display = hasRouteExport ? "" : "none";
+    routeUnavailable.style.display = hasRouteExport ? "none" : "block";
+    btnExport.disabled = true; btnImport.disabled = true;
+    if (!hasRouteExport) log("Export route not supported in this browser build; use DHT room chat.");
 
     // Show config preview and enable Start
     cfgOut.textContent = JSON.stringify(buildConfig(), null, 2);
@@ -427,6 +430,8 @@ function unloadRuntime() {
   btnAttach.disabled = true;
   btnDetach.disabled = true;
   btnJoin.disabled = true;
+  btnExport.disabled = true;
+  btnImport.disabled = true;
   kvExports.textContent = "—";
   tagVer.textContent = "runtime: not loaded";
   tagStatus.textContent = "idle";
@@ -538,9 +543,9 @@ async function startCore() {
     log(`VeilidRoutingContext new() failed: ${e?.message||e}`);
   }
 
-  const hasExportRoute = Object.keys(wasm||{}).some(k => k==="export_remote_private_route"||k==="exportRoute"||k==="toString");
-  document.getElementById('routePanel').style.display = hasExportRoute ? "" : "none";
-  document.getElementById('routeUnavailable').style.display = hasExportRoute ? "none" : "block";
+  hasRouteExport = Object.keys(wasm||{}).some(k => k==="export_remote_private_route"||k==="exportRoute"||k==="toString");
+  routePanel.style.display = hasRouteExport ? "" : "none";
+  routeUnavailable.style.display = hasRouteExport ? "none" : "block";
 }
 
 async function doAttach() {
@@ -550,11 +555,13 @@ async function doAttach() {
     await wasm.attach?.();
     setTimeout(()=>{ if (!attached) log("No Attachment update received yet; enabling controls in optimistic mode."); }, 750);
     btnDetach.disabled = false;
+    btnJoin.disabled = false;
+    if (hasRouteExport) { btnExport.disabled = false; btnImport.disabled = false; }
   }catch(e){ log(`attach error: ${j(e)}`); }
 }
 async function doDetach() {
   log("detach() called");
-  try{ await wasm.detach?.(); btnDetach.disabled = true; }catch(e){ log(`detach error: ${j(e)}`); }
+  try{ await wasm.detach?.(); btnDetach.disabled = true; btnJoin.disabled = true; btnExport.disabled = true; btnImport.disabled = true; }catch(e){ log(`detach error: ${j(e)}`); }
 }
 
 /*** DHT schema compatibility ***/
@@ -600,6 +607,33 @@ async function leaveRoom(){
   btnLeave.disabled=true; btnJoin.disabled=false;
 }
 
+/*** Private route ***/
+async function exportMyRoute(){
+  if (!attached) { log("Export route error: not attached yet"); return; }
+  const fn = wasm?.export_remote_private_route || wasm?.exportRoute;
+  if (!fn) { log("export_remote_private_route not available"); return; }
+  try {
+    const route = await fn.call(wasm);
+    txtPeerRoute.value = route;
+    log(`export route ok: ${route}`);
+  } catch (e) {
+    log(`export route error: ${e?.message||e}`);
+  }
+}
+async function importPeerRoute(){
+  if (!attached) { log("Import route error: not attached yet"); return; }
+  const route = (txtPeerRoute.value||"").trim();
+  if (!route) { log("Import route error: route required"); return; }
+  const fn = wasm?.import_remote_private_route || wasm?.importRoute;
+  if (!fn) { log("import_remote_private_route not available"); return; }
+  try {
+    await fn.call(wasm, route);
+    log("import route ok");
+  } catch (e) {
+    log(`import route error: ${e?.message||e}`);
+  }
+}
+
 /*** Wire up ***/
 document.getElementById('btnLoadRT').onclick  = loadRuntime;
 document.getElementById('btnUnloadRT').onclick= unloadRuntime;
@@ -610,6 +644,8 @@ document.getElementById('btnAttach').onclick  = doAttach;
 document.getElementById('btnDetach').onclick  = doDetach;
 document.getElementById('btnJoin').onclick    = joinRoom;
 document.getElementById('btnLeave').onclick   = leaveRoom;
+document.getElementById('btnExport').onclick  = exportMyRoute;
+document.getElementById('btnImport').onclick  = importPeerRoute;
 
 document.getElementById('chkReachables').onchange  = e=> log(`Use only reachables: ${e.target.checked}`);
 document.getElementById('chkForceWSS').onchange    = e=> log(`Force WSS ${e.target.checked ? "enabled" : "disabled"}`);
