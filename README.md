@@ -71,15 +71,16 @@ A single HTML file that runs entirely in the browser. It expects a **wasm‑bind
 
   * Namespace/kind/name → derives the **same record key** across participants
   * **Schema auto‑detection** avoids enum/tagging mismatches
+  * **Live message watch/send** via `setDhtValue` / `watchDhtValues`
 * **Route export/import (if available)**
 
-  * UI auto‑detects route APIs and enables the panel only when supported
+  * UI auto‑detects route APIs (camelCase or snake_case) and enables the panel only when supported
 
 ---
 
 ## What it is **not** (yet)
 
-* A full chat UI. This harness focuses on **connectivity and record access**. It derives and opens the DHT record (the “room”); wiring message storage and watches is straightforward from here (see **How DHT room keys are derived** and your runtime’s `setDhtValue` / `watchDhtValues` signatures).
+* A feature-complete chat app. It demonstrates basic DHT and private route messaging for debugging.
 * A persistence demo. Browser stores in this page are configured for **in‑memory** use.
 
 ---
@@ -145,11 +146,11 @@ Open the file directly (you’ll see `protocol=file:` in the header) **or** serv
    * Derived record key preview
    * `createDhtRecord` (no‑op if it exists) and `openDhtRecord` results
 
-> This confirms all parties will derive and open the **same** DHT record. From here, you can wire messaging using your runtime’s `setDhtValue` / `watchDhtValues` APIs.
+> This confirms all parties will derive and open the **same** DHT record. The demo wires basic messaging using `setDhtValue` and `watchDhtValues` so peers can chat immediately.
 
 ### 6) (Optional) Private route
 
-If your runtime exposes route export/import (functions such as `export_remote_private_route`/`import_remote_private_route` or equivalent), the **Private Route** panel is enabled. Otherwise you’ll see a note that it’s unavailable in this build; use DHT rooms instead.
+If your runtime exposes route export/import (functions such as `export_remote_private_route`/`import_remote_private_route` or camelCase variants like `exportRemotePrivateRoute`/`importRemotePrivateRoute`), the **Private Route** panel is enabled. Otherwise you’ll see a note that it’s unavailable in this build; use DHT rooms instead.
 
 ---
 
@@ -281,7 +282,7 @@ Different runtime builds expect different **internally‑tagged enum** formats f
 
 Once a strategy works, it’s reused (shown as **Schema mode**). The derived key is displayed so you can verify both sides compute the same key for the same `(namespace, kind, name)` triplet.
 
-> To extend this into actual chat messages, wire your build’s `setDhtValue` and `watchDhtValues` around the derived key.
+> The demo uses `setDhtValue` and `watchDhtValues` around the derived key for basic DHT chat.
 
 ---
 
@@ -305,7 +306,7 @@ This page expects a **matching** wasm‑bindgen pair:
 **Important**
 
 * Glue and WASM **must** come from the **same build**; mixing versions can cause undefined symbols or memory errors.
-* If you want **private route export/import** in the browser, ensure your build exposes the relevant APIs (look for exports like `export_remote_private_route` / `import_remote_private_route` or an equivalent to/from‑string representation). If not present, the UI hides the route panel and recommends DHT rooms.
+* If you want **private route export/import** in the browser, ensure your build exposes the relevant APIs (look for exports like `export_remote_private_route` / `import_remote_private_route` or camelCase variants) or an equivalent to/from‑string representation. If not present, the UI hides the route panel and recommends DHT rooms.
 
 ---
 

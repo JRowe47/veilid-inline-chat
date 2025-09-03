@@ -268,6 +268,7 @@ let schemaStrategy = null;
 let hasRouteExport = false;
 let currentRoomKey = null;
 let peerConnected = false;
+let roomWatch = null;
 
 tagUA.textContent = navigator.userAgent;
 tagCtx.textContent = `protocol=${location.protocol.replace(':','')}, secure=${window.isSecureContext}`;
@@ -432,8 +433,12 @@ async function loadRuntime() {
     log(`Module exports (${keys.length}) loaded.`);
 
     // Feature detect route export/import
-    const exports = Object.keys(wasm);
-    hasRouteExport = exports.includes("export_remote_private_route") || exports.includes("exportRoute") || exports.includes("toString");
+    const exportFns = ["export_remote_private_route","exportRoute","exportRemotePrivateRoute"];
+    const importFns = ["import_remote_private_route","importRoute","importRemotePrivateRoute"];
+    const ctxProto = (wasm?.VeilidRoutingContext||{}).prototype||{};
+    const hasExport = exportFns.some(n=> typeof wasm?.[n] === "function" || typeof ctxProto[n] === "function");
+    const hasImport = importFns.some(n=> typeof wasm?.[n] === "function" || typeof ctxProto[n] === "function");
+    hasRouteExport = hasExport && hasImport;
     routePanel.style.display = hasRouteExport ? "" : "none";
     routeUnavailable.style.display = hasRouteExport ? "none" : "block";
     btnExport.disabled = true; btnImport.disabled = true;
@@ -459,6 +464,7 @@ function unloadRuntime() {
   btnImport.disabled = true;
   btnSendRoom.disabled = true;
   btnSendRoute.disabled = true;
+  if (roomWatch){ try{ ctx.cancelDhtWatch?.(roomWatch); } catch(e){ log(`cancelDhtWatch: ${e?.message||e}`); } roomWatch=null; }
   roomChatUI.style.display = "none"; roomChatLog.textContent = ""; currentRoomKey = null;
   routeChatUI.style.display = "none"; routeChatLog.textContent = ""; peerConnected = false;
   kvExports.textContent = "—";
@@ -549,6 +555,15 @@ async function startCore() {
       if (u.state === "FullyAttached" || u.state === "OverAttached") { attached = true; btnDetach.disabled = false; }
     } else if (u.kind === "Network") {
       log(u.started ? `Network started; peers=${(u.peers && u.peers.length)||0}` : "Network stopped.");
+    } else if (u.kind === "AppMessage") {
+      try {
+        const data = u.data || u.message?.data || u.payload;
+        if (data) {
+          const bytes = typeof data === 'string' ? Uint8Array.from(atob(data), c=>c.charCodeAt(0)) : new Uint8Array(data);
+          const msg = new TextDecoder().decode(bytes);
+          routeChatLog.textContent += `peer: ${msg}\n`;
+        }
+      } catch(err){ log(`AppMessage decode: ${err?.message||err}`); }
     } else {
       log(`[update] ${JSON.stringify(u)}`);
     }
@@ -572,7 +587,12 @@ async function startCore() {
     log(`VeilidRoutingContext new() failed: ${e?.message||e}`);
   }
 
-  hasRouteExport = Object.keys(wasm||{}).some(k => k==="export_remote_private_route"||k==="exportRoute"||k==="toString");
+  const exportFns = ["export_remote_private_route","exportRoute","exportRemotePrivateRoute"];
+  const importFns = ["import_remote_private_route","importRoute","importRemotePrivateRoute"];
+  const ctxProto = (wasm?.VeilidRoutingContext||{}).prototype||{};
+  const hasExport = exportFns.some(n=> typeof wasm?.[n] === "function" || typeof ctxProto[n] === "function");
+  const hasImport = importFns.some(n=> typeof wasm?.[n] === "function" || typeof ctxProto[n] === "function");
+  hasRouteExport = hasExport && hasImport;
   routePanel.style.display = hasRouteExport ? "" : "none";
   routeUnavailable.style.display = hasRouteExport ? "none" : "block";
 }
@@ -593,6 +613,7 @@ async function doDetach() {
   try{
     await wasm.detach?.();
     btnDetach.disabled = true; btnJoin.disabled = true; btnExport.disabled = true; btnImport.disabled = true;
+    if (roomWatch){ try{ await ctx.cancelDhtWatch?.(roomWatch); } catch(e){ log(`cancelDhtWatch: ${e?.message||e}`); } roomWatch=null; }
     roomChatUI.style.display = "none"; btnSendRoom.disabled = true; currentRoomKey = null;
     routeChatUI.style.display = "none"; btnSendRoute.disabled = true; peerConnected = false;
   }catch(e){ log(`detach error: ${j(e)}`); }
@@ -632,6 +653,20 @@ async function joinRoom() {
     if (!ctx) ctx = new (wasm?.VeilidRoutingContext)();
     try { await ctx.createDhtRecord?.(key); log("createDhtRecord ok (or already existed)"); } catch(e){ log(`createDhtRecord: ${e?.message||e}`); }
     try { await ctx.openDhtRecord?.(key);   log("openDhtRecord ok"); }                   catch(e){ log(`openDhtRecord: ${e?.message||e}`); }
+    try {
+      roomWatch = await ctx.watchDhtValues?.(key, vals => {
+        try {
+          (vals||[]).forEach(v => {
+            const data = v?.value || v?.data || v;
+            if (!data) return;
+            const bytes = typeof data === 'string' ? Uint8Array.from(atob(data), c=>c.charCodeAt(0)) : new Uint8Array(data);
+            const msg = new TextDecoder().decode(bytes);
+            roomChatLog.textContent += `peer: ${msg}\n`;
+          });
+        } catch(err){ log(`watchDhtValues decode: ${err?.message||err}`); }
+      });
+      log("watchDhtValues ok");
+    } catch(e){ log(`watchDhtValues: ${e?.message||e}`); }
     currentRoomKey = key;
     roomChatUI.style.display = "";
     roomChatLog.textContent = "";
@@ -643,6 +678,7 @@ async function leaveRoom(){
   recKeyEl.textContent = "—";
   schemaModeEl.textContent = schemaStrategy? schemaStrategy.name : "not-detected";
   currentRoomKey = null;
+  if (roomWatch){ try{ await ctx.cancelDhtWatch?.(roomWatch); } catch(e){ log(`cancelDhtWatch: ${e?.message||e}`); } roomWatch=null; }
   roomChatUI.style.display = "none";
   roomChatLog.textContent = "";
   btnSendRoom.disabled = true;
@@ -652,10 +688,11 @@ async function leaveRoom(){
 /*** Private route ***/
 async function exportMyRoute(){
   if (!attached) { log("Export route error: not attached yet"); return; }
-  const fn = wasm?.export_remote_private_route || wasm?.exportRoute;
+  const exportFns = ["exportRemotePrivateRoute","export_remote_private_route","exportRoute"];
+  const fn = exportFns.map(n=> ctx?.[n] || wasm?.[n]).find(f=> typeof f === 'function');
   if (!fn) { log("export_remote_private_route not available"); return; }
   try {
-    const route = await fn.call(wasm);
+    const route = await fn.call(ctx||wasm);
     txtPeerRoute.value = route;
     log(`export route ok: ${route}`);
   } catch (e) {
@@ -666,10 +703,11 @@ async function importPeerRoute(){
   if (!attached) { log("Import route error: not attached yet"); return; }
   const route = (txtPeerRoute.value||"").trim();
   if (!route) { log("Import route error: route required"); return; }
-  const fn = wasm?.import_remote_private_route || wasm?.importRoute;
+  const importFns = ["importRemotePrivateRoute","import_remote_private_route","importRoute"];
+  const fn = importFns.map(n=> ctx?.[n] || wasm?.[n]).find(f=> typeof f === 'function');
   if (!fn) { log("import_remote_private_route not available"); return; }
   try {
-    await fn.call(wasm, route);
+    await fn.call(ctx||wasm, route);
     log("import route ok");
     peerConnected = true;
     routeChatUI.style.display = "";
@@ -686,7 +724,7 @@ async function sendRoomMsg(){
   const msg = (txtRoomMsg.value||"").trim();
   if (!msg) return;
   const data = new TextEncoder().encode(msg);
-  const fn = ctx?.setDhtRecordValue || ctx?.writeDhtRecordValue || ctx?.appendDhtRecordValue;
+  const fn = ctx?.setDhtValue || ctx?.setDhtRecordValue || ctx?.writeDhtRecordValue || ctx?.appendDhtRecordValue;
   if (!fn) { log("DHT write not available"); return; }
   try {
     await fn.call(ctx, currentRoomKey, data);
