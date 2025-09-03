@@ -1,0 +1,14 @@
+{
+  "name": "veilid-inline-chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx http-server public -p 5173",
+    "build": "node tools/embed-wasm.js && node tools/make-single-file.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
