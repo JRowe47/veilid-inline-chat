@@ -643,9 +643,15 @@ async function pickSchemaStrategy() {
   for (const c of candidates) {
     let k = null;
     try {
-      k = await Promise.resolve(c.fn("__probe__","room","hello")).catch(()=>null);
-    } catch {}
-    if (k) { schemaStrategy=c; schemaModeEl.textContent=c.name; return c; }
+      k = await c.fn("__probe__", "room", "hello");
+    } catch (e) {
+      continue;
+    }
+    if (k) {
+      schemaStrategy = c;
+      schemaModeEl.textContent = c.name;
+      return c;
+    }
   }
   throw new Error("Could not determine DHTSchema tagging for this runtime");
 }
