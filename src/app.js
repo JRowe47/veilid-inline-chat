@@ -1,4 +1,4 @@
-import { init } from '../veilid_wasm.js';
+import { init } from './wasm-embedded.js';
 
 console.log('App boot');
 
