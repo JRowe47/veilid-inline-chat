@@ -3,8 +3,8 @@
 The project is organized into nine milestones building toward a single‑file Veilid chat.
 
 1. [x] **Scaffold** – repository structure, dev/build scripts.
-2. [ ] **Load Veilid example** – initialize WASM and expose `veilid` global.
-3. [ ] **Embed WASM** – Base64 embed of glue and WASM; dynamic loader.
+2. [x] **Load Veilid example** – initialize WASM and expose `veilid` global.
+3. [x] **Embed WASM** – Base64 embed of glue and WASM; dynamic loader.
 4. [ ] **Connectivity** – bootstrap probing, attach lifecycle, peer stats.
 5. [ ] **Persistence** – identity, contacts, rooms stored locally.
 6. [ ] **Rooms via DHT** – multi‑writer room chat with watch/send.
