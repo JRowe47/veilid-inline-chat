@@ -623,16 +623,21 @@ async function doDetach() {
 async function pickSchemaStrategy() {
   if (schemaStrategy) return schemaStrategy;
   if (!ctx || !ctx.getDhtRecordKey) throw new Error("getDhtRecordKey not available");
+  // Try object/tagged forms first to avoid console noise on runtimes that don't accept plain strings.
   const candidates = [
-    { name: "plain-strings", fn: (ns,kind,name)=>ctx.getDhtRecordKey(ns,kind,name) },
     { name: "tag-type-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"namespace", namespace:ns}, kind, name) },
     { name: "tag-Type-Namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"Namespace", namespace:ns}, kind, name) },
     { name: "tag-schema-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({schema:"namespace", namespace:ns}, kind, name) },
     { name: "tag-type-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"app", app:ns}, kind, name) },
     { name: "tag-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns}, kind, name) },
+    { name: "plain-strings", fn: (ns,kind,name)=>ctx.getDhtRecordKey(ns,kind,name) },
   ];
   for (const c of candidates) {
-    try { const k = await Promise.resolve(c.fn("__probe__","room","hello")); if (k) { schemaStrategy=c; schemaModeEl.textContent=c.name; return c; } } catch {}
+    let k = null;
+    try {
+      k = await Promise.resolve(c.fn("__probe__","room","hello")).catch(()=>null);
+    } catch {}
+    if (k) { schemaStrategy=c; schemaModeEl.textContent=c.name; return c; }
   }
   throw new Error("Could not determine DHTSchema tagging for this runtime");
 }
