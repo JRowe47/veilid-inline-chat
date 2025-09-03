@@ -625,11 +625,19 @@ async function pickSchemaStrategy() {
   if (!ctx || !ctx.getDhtRecordKey) throw new Error("getDhtRecordKey not available");
   // Try object/tagged forms first to avoid console noise on runtimes that don't accept plain strings.
   const candidates = [
+    // Single object forms that include kind + name
+    { name: "obj-type-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"namespace", namespace:ns, kind, name}) },
+    { name: "obj-Type-Namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"Namespace", namespace:ns, kind, name}) },
+    { name: "obj-schema-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({schema:"namespace", namespace:ns, kind, name}) },
+    { name: "obj-type-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"app", app:ns, kind, name}) },
+    { name: "obj-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns, kind, name}) },
+    // Tagged object plus separate kind/name
     { name: "tag-type-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"namespace", namespace:ns}, kind, name) },
     { name: "tag-Type-Namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"Namespace", namespace:ns}, kind, name) },
     { name: "tag-schema-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({schema:"namespace", namespace:ns}, kind, name) },
     { name: "tag-type-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"app", app:ns}, kind, name) },
     { name: "tag-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns}, kind, name) },
+    // Plain strings
     { name: "plain-strings", fn: (ns,kind,name)=>ctx.getDhtRecordKey(ns,kind,name) },
   ];
   for (const c of candidates) {
