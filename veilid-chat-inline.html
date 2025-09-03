@@ -150,6 +150,13 @@
       </div>
       <div class="row"><label class="muted">Derived key</label><span id="recKey" class="pill mono">—</span></div>
       <div class="row"><label class="muted">Schema mode</label><span id="schemaMode" class="pill mono">not-detected</span></div>
+      <div id="roomChatUI" style="display:none">
+        <div id="roomChatLog" class="mono" style="background:#0b0e12;padding:6px;margin:8px 0;height:120px;overflow:auto"></div>
+        <div class="row">
+          <input id="txtRoomMsg" type="text" placeholder="Message" style="flex:1">
+          <button id="btnSendRoom" disabled>Send</button>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -165,6 +172,13 @@
           <button id="btnExport" disabled>My private route</button>
           <input id="txtPeerRoute" type="text" placeholder="Peer route" style="width:60%">
           <button id="btnImport" disabled>Connect</button>
+        </div>
+      </div>
+      <div id="routeChatUI" style="display:none">
+        <div id="routeChatLog" class="mono" style="background:#0b0e12;padding:6px;margin:8px 0;height:120px;overflow:auto"></div>
+        <div class="row">
+          <input id="txtRouteMsg" type="text" placeholder="Message" style="flex:1">
+          <button id="btnSendRoute" disabled>Send</button>
         </div>
       </div>
     </div>
@@ -227,6 +241,15 @@ const routeUnavailable = document.getElementById('routeUnavailable');
 const routePanel       = document.getElementById('routePanel');
 const btnExport        = document.getElementById('btnExport');
 const btnImport        = document.getElementById('btnImport');
+const txtPeerRoute     = document.getElementById('txtPeerRoute');
+const roomChatUI       = document.getElementById('roomChatUI');
+const roomChatLog      = document.getElementById('roomChatLog');
+const txtRoomMsg       = document.getElementById('txtRoomMsg');
+const btnSendRoom      = document.getElementById('btnSendRoom');
+const routeChatUI      = document.getElementById('routeChatUI');
+const routeChatLog     = document.getElementById('routeChatLog');
+const txtRouteMsg      = document.getElementById('txtRouteMsg');
+const btnSendRoute     = document.getElementById('btnSendRoute');
 
 const rtsrcRadios = [...document.querySelectorAll('input[name="rtsrc"]')];
 const srcFiles    = document.getElementById('srcFiles');
@@ -241,6 +264,9 @@ let started = false;
 let attached = false;
 let reachable = [];
 let schemaStrategy = null;
+let hasRouteExport = false;
+let currentRoomKey = null;
+let peerConnected = false;
 
 tagUA.textContent = navigator.userAgent;
 tagCtx.textContent = `protocol=${location.protocol.replace(':','')}, secure=${window.isSecureContext}`;
@@ -406,10 +432,11 @@ async function loadRuntime() {
 
     // Feature detect route export/import
     const exports = Object.keys(wasm);
-    const hasExportRoute = exports.includes("export_remote_private_route") || exports.includes("exportRoute") || exports.includes("toString");
-    document.getElementById('routePanel').style.display = hasExportRoute ? "" : "none";
-    document.getElementById('routeUnavailable').style.display = hasExportRoute ? "none" : "block";
-    if (!hasExportRoute) log("Export route not supported in this browser build; use DHT room chat.");
+    hasRouteExport = exports.includes("export_remote_private_route") || exports.includes("exportRoute") || exports.includes("toString");
+    routePanel.style.display = hasRouteExport ? "" : "none";
+    routeUnavailable.style.display = hasRouteExport ? "none" : "block";
+    btnExport.disabled = true; btnImport.disabled = true;
+    if (!hasRouteExport) log("Export route not supported in this browser build; use DHT room chat.");
 
     // Show config preview and enable Start
     cfgOut.textContent = JSON.stringify(buildConfig(), null, 2);
@@ -427,6 +454,12 @@ function unloadRuntime() {
   btnAttach.disabled = true;
   btnDetach.disabled = true;
   btnJoin.disabled = true;
+  btnExport.disabled = true;
+  btnImport.disabled = true;
+  btnSendRoom.disabled = true;
+  btnSendRoute.disabled = true;
+  roomChatUI.style.display = "none"; roomChatLog.textContent = ""; currentRoomKey = null;
+  routeChatUI.style.display = "none"; routeChatLog.textContent = ""; peerConnected = false;
   kvExports.textContent = "—";
   tagVer.textContent = "runtime: not loaded";
   tagStatus.textContent = "idle";
@@ -538,9 +571,9 @@ async function startCore() {
     log(`VeilidRoutingContext new() failed: ${e?.message||e}`);
   }
 
-  const hasExportRoute = Object.keys(wasm||{}).some(k => k==="export_remote_private_route"||k==="exportRoute"||k==="toString");
-  document.getElementById('routePanel').style.display = hasExportRoute ? "" : "none";
-  document.getElementById('routeUnavailable').style.display = hasExportRoute ? "none" : "block";
+  hasRouteExport = Object.keys(wasm||{}).some(k => k==="export_remote_private_route"||k==="exportRoute"||k==="toString");
+  routePanel.style.display = hasRouteExport ? "" : "none";
+  routeUnavailable.style.display = hasRouteExport ? "none" : "block";
 }
 
 async function doAttach() {
@@ -550,15 +583,22 @@ async function doAttach() {
     await wasm.attach?.();
     setTimeout(()=>{ if (!attached) log("No Attachment update received yet; enabling controls in optimistic mode."); }, 750);
     btnDetach.disabled = false;
+    btnJoin.disabled = false;
+    if (hasRouteExport) { btnExport.disabled = false; btnImport.disabled = false; }
   }catch(e){ log(`attach error: ${j(e)}`); }
 }
 async function doDetach() {
   log("detach() called");
-  try{ await wasm.detach?.(); btnDetach.disabled = true; }catch(e){ log(`detach error: ${j(e)}`); }
+  try{
+    await wasm.detach?.();
+    btnDetach.disabled = true; btnJoin.disabled = true; btnExport.disabled = true; btnImport.disabled = true;
+    roomChatUI.style.display = "none"; btnSendRoom.disabled = true; currentRoomKey = null;
+    routeChatUI.style.display = "none"; btnSendRoute.disabled = true; peerConnected = false;
+  }catch(e){ log(`detach error: ${j(e)}`); }
 }
 
 /*** DHT schema compatibility ***/
-function pickSchemaStrategy() {
+async function pickSchemaStrategy() {
   if (schemaStrategy) return schemaStrategy;
   if (!ctx || !ctx.getDhtRecordKey) throw new Error("getDhtRecordKey not available");
   const candidates = [
@@ -570,13 +610,13 @@ function pickSchemaStrategy() {
     { name: "tag-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns}, kind, name) },
   ];
   for (const c of candidates) {
-    try { const k=c.fn("__probe__","room","hello"); if (k) { schemaStrategy=c; schemaModeEl.textContent=c.name; return c; } } catch {}
+    try { const k = await Promise.resolve(c.fn("__probe__","room","hello")); if (k) { schemaStrategy=c; schemaModeEl.textContent=c.name; return c; } } catch {}
   }
   throw new Error("Could not determine DHTSchema tagging for this runtime");
 }
-function deriveRecordKey(ns, kind, name) {
-  const strat = pickSchemaStrategy();
-  return strat.fn(ns, kind, name);
+async function deriveRecordKey(ns, kind, name) {
+  const strat = await pickSchemaStrategy();
+  return await Promise.resolve(strat.fn(ns, kind, name));
 }
 
 /*** Room join/leave ***/
@@ -585,19 +625,91 @@ async function joinRoom() {
   const ns=(nsEl.value||"").trim(), kind=(kindEl.value||"").trim(), name=(roomEl.value||"").trim();
   if (!ns || !kind || !name) { log("Join room error: namespace/kind/room are required."); return; }
   try{
-    const key = deriveRecordKey(ns, kind, name);
+    const key = await deriveRecordKey(ns, kind, name);
     recKeyEl.textContent = typeof key === "string" ? key : JSON.stringify(key);
     log(`Room key derived ok. schemaMode=${schemaStrategy?.name}`);
     if (!ctx) ctx = new (wasm?.VeilidRoutingContext)();
     try { await ctx.createDhtRecord?.(key); log("createDhtRecord ok (or already existed)"); } catch(e){ log(`createDhtRecord: ${e?.message||e}`); }
     try { await ctx.openDhtRecord?.(key);   log("openDhtRecord ok"); }                   catch(e){ log(`openDhtRecord: ${e?.message||e}`); }
+    currentRoomKey = key;
+    roomChatUI.style.display = "";
+    roomChatLog.textContent = "";
+    btnSendRoom.disabled = false;
     btnLeave.disabled=false; btnJoin.disabled=true;
   }catch(e){ log(`Join room error: ${e?.message||e}`); }
 }
 async function leaveRoom(){
   recKeyEl.textContent = "—";
   schemaModeEl.textContent = schemaStrategy? schemaStrategy.name : "not-detected";
+  currentRoomKey = null;
+  roomChatUI.style.display = "none";
+  roomChatLog.textContent = "";
+  btnSendRoom.disabled = true;
   btnLeave.disabled=true; btnJoin.disabled=false;
+}
+
+/*** Private route ***/
+async function exportMyRoute(){
+  if (!attached) { log("Export route error: not attached yet"); return; }
+  const fn = wasm?.export_remote_private_route || wasm?.exportRoute;
+  if (!fn) { log("export_remote_private_route not available"); return; }
+  try {
+    const route = await fn.call(wasm);
+    txtPeerRoute.value = route;
+    log(`export route ok: ${route}`);
+  } catch (e) {
+    log(`export route error: ${e?.message||e}`);
+  }
+}
+async function importPeerRoute(){
+  if (!attached) { log("Import route error: not attached yet"); return; }
+  const route = (txtPeerRoute.value||"").trim();
+  if (!route) { log("Import route error: route required"); return; }
+  const fn = wasm?.import_remote_private_route || wasm?.importRoute;
+  if (!fn) { log("import_remote_private_route not available"); return; }
+  try {
+    await fn.call(wasm, route);
+    log("import route ok");
+    peerConnected = true;
+    routeChatUI.style.display = "";
+    routeChatLog.textContent = "";
+    btnSendRoute.disabled = false;
+  } catch (e) {
+    log(`import route error: ${e?.message||e}`);
+  }
+}
+
+/*** Chat send helpers ***/
+async function sendRoomMsg(){
+  if (!currentRoomKey) { log("Room message error: not in room"); return; }
+  const msg = (txtRoomMsg.value||"").trim();
+  if (!msg) return;
+  const data = new TextEncoder().encode(msg);
+  const fn = ctx?.setDhtRecordValue || ctx?.writeDhtRecordValue || ctx?.appendDhtRecordValue;
+  if (!fn) { log("DHT write not available"); return; }
+  try {
+    await fn.call(ctx, currentRoomKey, data);
+    roomChatLog.textContent += `me: ${msg}\n`;
+    txtRoomMsg.value = "";
+  } catch (e) {
+    log(`Room message error: ${e?.message||e}`);
+  }
+}
+async function sendRouteMsg(){
+  if (!peerConnected) { log("Route message error: no peer route"); return; }
+  const msg = (txtRouteMsg.value||"").trim();
+  if (!msg) return;
+  const data = new TextEncoder().encode(msg);
+  const sendFns = ['sendPrivateMessage','send_message','routeSend','sendMessage','send'];
+  const fn = sendFns.map(n=>ctx?.[n]).find(Boolean) || wasm?.send_private_message || wasm?.sendMessage;
+  if (!fn) { log("Route send not available"); return; }
+  try {
+    await fn.call(ctx||wasm, data);
+    routeChatLog.textContent += `me: ${msg}\n`;
+    txtRouteMsg.value = "";
+  } catch (e) {
+    log(`Route message error: ${e?.message||e}`);
+  }
 }
 
 /*** Wire up ***/
@@ -610,6 +722,10 @@ document.getElementById('btnAttach').onclick  = doAttach;
 document.getElementById('btnDetach').onclick  = doDetach;
 document.getElementById('btnJoin').onclick    = joinRoom;
 document.getElementById('btnLeave').onclick   = leaveRoom;
+document.getElementById('btnExport').onclick  = exportMyRoute;
+document.getElementById('btnImport').onclick  = importPeerRoute;
+document.getElementById('btnSendRoom').onclick= sendRoomMsg;
+document.getElementById('btnSendRoute').onclick= sendRouteMsg;
 
 document.getElementById('chkReachables').onchange  = e=> log(`Use only reachables: ${e.target.checked}`);
 document.getElementById('chkForceWSS').onchange    = e=> log(`Force WSS ${e.target.checked ? "enabled" : "disabled"}`);
