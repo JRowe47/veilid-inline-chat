@@ -623,7 +623,8 @@ async function doDetach() {
 async function pickSchemaStrategy() {
   if (schemaStrategy) return schemaStrategy;
   if (!ctx || !ctx.getDhtRecordKey) throw new Error("getDhtRecordKey not available");
-  // Try object/tagged forms first to avoid console noise on runtimes that don't accept plain strings.
+  // Try object and plain string forms before tagged ones to reduce console noise
+  // from runtimes that error if required fields are missing.
   const candidates = [
     // Single object forms that include kind + name
     { name: "obj-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({namespace:ns, kind, name}) },
@@ -633,6 +634,8 @@ async function pickSchemaStrategy() {
     { name: "obj-schema-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({schema:"namespace", namespace:ns, kind, name}) },
     { name: "obj-type-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"app", app:ns, kind, name}) },
     { name: "obj-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns, kind, name}) },
+    // Plain strings
+    { name: "plain-strings", fn: (ns,kind,name)=>ctx.getDhtRecordKey(ns,kind,name) },
     // Tagged object plus separate kind/name
     { name: "tag-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({namespace:ns}, kind, name) },
     { name: "tag-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({app:ns}, kind, name) },
@@ -641,8 +644,6 @@ async function pickSchemaStrategy() {
     { name: "tag-schema-namespace", fn: (ns,kind,name)=>ctx.getDhtRecordKey({schema:"namespace", namespace:ns}, kind, name) },
     { name: "tag-type-app", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"app", app:ns}, kind, name) },
     { name: "tag-Type-App", fn: (ns,kind,name)=>ctx.getDhtRecordKey({type:"App", app:ns}, kind, name) },
-    // Plain strings
-    { name: "plain-strings", fn: (ns,kind,name)=>ctx.getDhtRecordKey(ns,kind,name) },
   ];
   for (const c of candidates) {
     let k = null;
