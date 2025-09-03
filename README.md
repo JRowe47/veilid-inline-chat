@@ -2,6 +2,10 @@
 
 A self‑contained **browser demo** for bringing up the Veilid runtime (WASM + JS glue), probing bootstrap peers, starting and attaching to the network over **WS/WSS**, and joining a **DHT “room”** (record) for basic interoperability checks. It’s designed as a **connectivity and debugging harness** first; the UI shows attach state and peer counts and can open a DHT record derived from a shared *namespace/kind/name* tuple. If your runtime build exposes **private route export/import**, the UI will enable that path too; otherwise it falls back to DHT rooms.
 
+curl -L -o veilid_wasm.js https://unpkg.com/@bmv437/veilid-wasm@0.4.6/veilid_wasm.js
+curl -L -o veilid_wasm_bg.wasm https://unpkg.com/@bmv437/veilid-wasm@0.4.6/veilid_wasm_bg.wasm
+
+Grab and save these in the same directory as the html page.
 
 ## Table of contents
 
