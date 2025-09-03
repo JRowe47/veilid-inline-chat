@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npx http-server public -p 5173",
+    "dev": "npx http-server . -p 5173",
     "build": "node tools/embed-wasm.js && node tools/make-single-file.js"
   },
   "dependencies": {},
